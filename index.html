@@ -25,5 +25,428 @@
   <script src="./assets/js/leaflet-control-condended-attribution.js"></script>
   <script src="./assets/js/Leaflet.Icon.Glyph.js"></script>
   <script src="./assets/js/main.js"></script>
+  <script src="./assets/js/leaflet-image.js"></script>
+  
+    <script>
+// Добавляем в начало main.js
+var markedMarkers = new Map(); // Хранит ID и состояние меток
+
+// Функция для генерации уникального ID метки
+function generateMarkerId(marker) {
+    const latlng = marker.getLatLng();
+    const title = marker.options.title || '';
+    return `${latlng.lat.toFixed(6)}_${latlng.lng.toFixed(6)}_${title.replace(/[^a-zA-Z0-9]/g, '_')}`;
+}
+
+// Функция для отметки/снятия отметки с метки
+function toggleMarkerMark(marker) {
+    const markerId = generateMarkerId(marker);
+    console.log('Toggle marker:', markerId);
+    
+    if (markedMarkers.has(markerId)) {
+        // Снимаем отметку
+        marker.setOpacity(1);
+        markedMarkers.delete(markerId);
+        console.log('Marker unmarked');
+    } else {
+        // Ставим отметку
+        marker.setOpacity(0.5);
+        markedMarkers.set(markerId, {
+            lat: marker.getLatLng().lat,
+            lng: marker.getLatLng().lng,
+            title: marker.options.title || '',
+            timestamp: new Date().toISOString()
+        });
+        console.log('Marker marked');
+    }
+    
+    // Сохраняем состояние в localStorage
+    saveMarkedMarkers();
+    
+    // Обновляем счетчик отмеченных меток
+    updateMarkedCounter();
+}
+
+// Функция для сохранения отмеченных меток в localStorage
+function saveMarkedMarkers() {
+    const markersArray = Array.from(markedMarkers.entries());
+    console.log('Saving markers to localStorage:', markersArray.length);
+    localStorage.setItem('markedMarkers', JSON.stringify(markersArray));
+    
+    // Сохраняем также как объект для удобства
+    const markersObject = {};
+    markersArray.forEach(([id, data]) => {
+        markersObject[id] = data;
+    });
+    localStorage.setItem('markedMarkersObject', JSON.stringify(markersObject));
+}
+
+// Функция для загрузки отмеченных меток из localStorage
+function loadMarkedMarkers() {
+    console.log('Loading markers from localStorage...');
+    const saved = localStorage.getItem('markedMarkers');
+    
+    if (saved) {
+        try {
+            const markersArray = JSON.parse(saved);
+            console.log('Loaded markers array:', markersArray.length);
+            
+            markedMarkers.clear();
+            markersArray.forEach(([id, data]) => {
+                markedMarkers.set(id, data);
+            });
+            
+            // Применяем состояния ко всем меткам на карте
+            applyMarkedMarkers();
+            updateMarkedCounter();
+            console.log('Markers loaded and applied successfully');
+        } catch (e) {
+            console.error('Ошибка загрузки отмеченных меток:', e);
+        }
+    } else {
+        console.log('No saved markers found');
+    }
+}
+
+// Функция для применения сохраненных состояний к меткам
+function applyMarkedMarkers() {
+    console.log('Applying marked markers...');
+    let appliedCount = 0;
+    
+    // Получаем все маркеры со всех слоев
+    const allLayers = [ol_pa, ol_vault, ol_loc, ol_loc2, ol_train, ol_pwr, ol_map, ol_tape, ol_wb, ol_rift, ol_event, ol_locv];
+    
+    allLayers.forEach(layer => {
+        if (layer && typeof layer.eachLayer === 'function') {
+            layer.eachLayer(marker => {
+                if (marker instanceof L.Marker) {
+                    try {
+                        const markerId = generateMarkerId(marker);
+                        if (markedMarkers.has(markerId)) {
+                            marker.setOpacity(0.5);
+                            appliedCount++;
+                            console.log('Applied mark to:', markerId);
+                        }
+                    } catch (e) {
+                        console.error('Error applying marker:', e);
+                    }
+                }
+            });
+        }
+    });
+    
+    console.log(`Applied marks to ${appliedCount} markers`);
+}
+
+// Функция для обновления счетчика отмеченных меток
+function updateMarkedCounter() {
+    const counter = document.getElementById('markedCounter');
+    if (counter) {
+        counter.textContent = `Отмечено: ${markedMarkers.size}`;
+    }
+}
+
+// Модифицируем существующие функции tooltipTemplate
+window.tooltipTemplate = function(title, bobblehead=0, magazine=0, capstash=0, recipe='') {
+    var result = '<div class="tooltip">';
+    result += '<div class="tooltip-header">';
+    result += '<div class="tooltitle">'+title+'</div>';
+    result += '<button class="mark-button" onclick="window.markButtonClick(event)">✓</button>';
+    result += '</div>';
+    if (bobblehead) result += '<div>Bobblehead: x' + bobblehead + '</div>';
+    if (magazine) result += '<div>Magazine: x' + magazine + '</div>';
+    if (capstash) result += '<div>Cap Stash: x' + capstash + '</div>';
+    if (recipe) result += '<div>Recipe/Plan: x' + recipe + '</div>';
+    result += '</div>';
+    return result;
+};
+
+window.tooltipMapTemplate = function(title, img='', text='') {
+    var result = '<div class="tooltip">';
+    result += '<div class="tooltip-header">';
+    result += '<div class="tooltitle">'+title+'</div>';
+    result += '<button class="mark-button" onclick="window.markButtonClick(event)">✓</button>';
+    result += '</div>';
+    if (img) result += '<div><img src="assets/img/treasure/' + img + '"/></div>';
+    if (text) result += '<div>' + text + '</div>';
+    result += '</div>';
+    return result;
+};
+
+// Обработчик клика по кнопке отметки в тултипе
+window.markButtonClick = function(event) {
+    event.stopPropagation();
+    event.preventDefault();
+    
+    const tooltip = event.target.closest('.leaflet-tooltip');
+    if (!tooltip) return;
+    
+    // Находим связанный маркер
+    const markerElement = tooltip._source && tooltip._source._icon;
+    if (!markerElement) {
+        // Пробуем найти маркер через координаты
+        const allMarkers = [];
+        const allLayers = [ol_pa, ol_vault, ol_loc, ol_loc2, ol_train, ol_pwr, ol_map, ol_tape, ol_wb, ol_rift, ol_event, ol_locv];
+        
+        allLayers.forEach(layer => {
+            if (layer && typeof layer.eachLayer === 'function') {
+                layer.eachLayer(marker => {
+                    if (marker instanceof L.Marker && marker.getTooltip() === tooltip) {
+                        allMarkers.push(marker);
+                    }
+                });
+            }
+        });
+        
+        if (allMarkers.length > 0) {
+            toggleMarkerMark(allMarkers[0]);
+        }
+        return;
+    }
+    
+    // Находим маркер через Leaflet
+    let targetMarker = null;
+    map.eachLayer(function(layer) {
+        if (layer instanceof L.Marker && layer._icon === markerElement) {
+            targetMarker = layer;
+        }
+    });
+    
+    if (targetMarker) {
+        toggleMarkerMark(targetMarker);
+    }
+};
+
+// Добавляем обработчики клика на существующие маркеры
+function addClickHandlersToMarkers() {
+    const allLayers = [ol_pa, ol_vault, ol_loc, ol_loc2, ol_train, ol_pwr, ol_map, ol_tape, ol_wb, ol_rift, ol_event, ol_locv];
+    
+    allLayers.forEach(layer => {
+        if (layer && typeof layer.eachLayer === 'function') {
+            layer.eachLayer(marker => {
+                if (marker instanceof L.Marker) {
+                    // Удаляем старые обработчики и добавляем новые
+                    marker.off('click.toggleMark');
+                    marker.on('click.toggleMark', function(e) {
+                        toggleMarkerMark(e.target);
+                    });
+                }
+            });
+        }
+    });
+}
+
+// Функция для снятия отметок со всех меток
+function clearAllMarks() {
+    if (!confirm('Очистить все отметки?')) return;
+    
+    const allLayers = [ol_pa, ol_vault, ol_loc, ol_loc2, ol_train, ol_pwr, ol_map, ol_tape, ol_wb, ol_rift, ol_event, ol_locv];
+    
+    allLayers.forEach(layer => {
+        if (layer && typeof layer.eachLayer === 'function') {
+            layer.eachLayer(marker => {
+                if (marker instanceof L.Marker) {
+                    marker.setOpacity(1);
+                }
+            });
+        }
+    });
+    
+    markedMarkers.clear();
+    saveMarkedMarkers();
+    updateMarkedCounter();
+    alert('Все отметки очищены!');
+}
+
+// Добавляем CSS стили для интерфейса
+document.addEventListener('DOMContentLoaded', function() {
+    const style = document.createElement('style');
+    style.textContent = `
+        .mark-button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            padding: 2px 8px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+        
+        .mark-button:hover {
+            background: #45a049;
+        }
+        
+        .mark-button.marked {
+            background: #f44336;
+        }
+        
+        .mark-button.marked:hover {
+            background: #d32f2f;
+        }
+        
+        .tooltip-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+        
+        .marker-controls {
+            background: white;
+            padding: 5px;
+            border-radius: 4px;
+            box-shadow: 0 1px 5px rgba(0,0,0,0.4);
+            font-size: 12px;
+        }
+        
+        .marker-controls button {
+            margin: 2px;
+            padding: 5px 10px;
+            border: none;
+            background: #f8f9fa;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        
+        .marker-controls button:hover {
+            background: #e9ecef;
+        }
+        
+        #markedCounter {
+            margin: 5px;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+    `;
+    document.head.appendChild(style);
+    
+    // Создаем контейнер для кнопок управления
+    const controlDiv = document.createElement('div');
+    controlDiv.className = 'leaflet-control leaflet-bar marker-controls';
+    controlDiv.innerHTML = `
+        <div id="markedCounter">Отмечено: 0</div>
+        <button id="saveMarks" title="Сохранить отметки">💾 Сохранить</button>
+        <button id="loadMarks" title="Загрузить отметки">📂 Загрузить</button>
+        <button id="clearMarks" title="Очистить все отметки">🗑️ Очистить</button>
+    `;
+    
+    // Добавляем на карту
+    L.Control.MarkerControls = L.Control.extend({
+        onAdd: function(map) {
+            return controlDiv;
+        }
+    });
+    
+    new L.Control.MarkerControls({position: 'topright'}).addTo(map);
+    
+    // Обработчики кнопок
+    document.getElementById('saveMarks').addEventListener('click', function() {
+        saveMarkedMarkers();
+        alert('Отметки сохранены!');
+    });
+    
+    document.getElementById('loadMarks').addEventListener('click', function() {
+        loadMarkedMarkers();
+    });
+    
+    document.getElementById('clearMarks').addEventListener('click', clearAllMarks);
+    
+    // Добавляем обработчики клика на маркеры после загрузки страницы
+    setTimeout(function() {
+        addClickHandlersToMarkers();
+        // Загружаем отмеченные метки при загрузке страницы
+        loadMarkedMarkers();
+    }, 1000);
+});
+
+// Также добавляем обработчик двойного клика для быстрой отметки
+map.on('dblclick', function(e) {
+    // Проверяем, был ли клик по маркеру
+    if (e.originalEvent.target.closest('.leaflet-marker-icon')) {
+        const markerElement = e.originalEvent.target.closest('.leaflet-marker-icon');
+        
+        // Ищем маркер в слоях карты
+        let targetMarker = null;
+        map.eachLayer(function(layer) {
+            if (layer instanceof L.Marker && layer._icon === markerElement) {
+                targetMarker = layer;
+            }
+        });
+        
+        if (targetMarker) {
+            toggleMarkerMark(targetMarker);
+        }
+    }
+});
+
+// Функция для экспорта отмеченных меток в JSON файл
+window.exportMarkedMarkers = function() {
+    const exportData = {
+        timestamp: new Date().toISOString(),
+        totalMarkers: markedMarkers.size,
+        markers: Array.from(markedMarkers.entries())
+    };
+    
+    const dataStr = JSON.stringify(exportData, null, 2);
+    const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+    
+    const exportFileDefaultName = `marked-markers-${new Date().toISOString().slice(0,10)}.json`;
+    
+    const linkElement = document.createElement('a');
+    linkElement.setAttribute('href', dataUri);
+    linkElement.setAttribute('download', exportFileDefaultName);
+    linkElement.click();
+};
+
+// Функция для импорта отмеченных меток из JSON файла
+window.importMarkedMarkers = function(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const importData = JSON.parse(e.target.result);
+            
+            if (!importData.markers || !Array.isArray(importData.markers)) {
+                throw new Error('Неверный формат файла');
+            }
+            
+            markedMarkers.clear();
+            
+            importData.markers.forEach(([id, data]) => {
+                markedMarkers.set(id, data);
+            });
+            
+            applyMarkedMarkers();
+            saveMarkedMarkers();
+            updateMarkedCounter();
+            
+            alert(`Импортировано ${importData.markers.length} отмеченных меток`);
+        } catch (error) {
+            console.error('Ошибка импорта:', error);
+            alert('Ошибка при импорте файла: ' + error.message);
+        }
+    };
+    reader.readAsText(file);
+};
+
+// Добавляем кнопку импорта/экспорта в интерфейс
+setTimeout(function() {
+    const controlDiv = document.querySelector('.marker-controls');
+    if (controlDiv) {
+        const importExportDiv = document.createElement('div');
+        importExportDiv.style.marginTop = '5px';
+        importExportDiv.innerHTML = `
+            <input type="file" id="importFile" accept=".json" style="display: none" onchange="importMarkedMarkers(event)">
+            <button onclick="exportMarkedMarkers()" title="Экспорт в JSON">📤 Экспорт</button>
+            <button onclick="document.getElementById('importFile').click()" title="Импорт из JSON">📥 Импорт</button>
+        `;
+        controlDiv.appendChild(importExportDiv);
+    }
+}, 1500);
+  </script>
 </body>
 </html>
