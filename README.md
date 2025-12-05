@@ -2,7 +2,7 @@
 There is marking location addition for original repo, also you can import\export your marks to explore
 
 
-# About original repo (copy from it)
+### About original repo
 A semi interactive map for Fallout 76
 Demo: https://dan-parker.github.io/Fallout76-Map/index.html
 
